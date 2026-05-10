@@ -53,7 +53,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: leech-split-job
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.run_id }}
   cancel-in-progress: false
 
 jobs:
