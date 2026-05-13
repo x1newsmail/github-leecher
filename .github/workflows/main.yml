@@ -1,4 +1,4 @@
-name: انتقال فایل به گیت هاب
+name: 📥 انتقال فایل (لینک مستقیم)
 
 on:
   workflow_dispatch:
@@ -128,7 +128,7 @@ jobs:
               FILENAME_EXT=""
             fi
 
-            PREFIX="sci-hub.ir"
+            PREFIX="Sci-HuB.iR"
 
             if [ "$total" -gt 1 ]; then
               NUM=$(printf '%02d' $counter)
