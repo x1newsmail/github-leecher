@@ -1,0 +1,264 @@
+name: دانلود از شبکه‌های اجتماعی
+
+on:
+  workflow_dispatch:
+    inputs:
+      media_url_1:
+        description: 'لینک ۱ (الزامی)'
+        required: true
+        type: string
+        default: ''
+      media_url_2:
+        description: 'لینک ۲ (اختیاری)'
+        required: false
+        type: string
+        default: ''
+      media_url_3:
+        description: 'لینک ۳ (اختیاری)'
+        required: false
+        type: string
+        default: ''
+      media_url_4:
+        description: 'لینک ۴ (اختیاری)'
+        required: false
+        type: string
+        default: ''
+      media_url_5:
+        description: 'لینک ۵ (اختیاری)'
+        required: false
+        type: string
+        default: ''
+      quality:
+        description: 'کیفیت (فقط صدا = mp3)'
+        required: false
+        type: choice
+        default: 'bestvideo+bestaudio/best'
+        options:
+          - 'bestvideo+bestaudio/best (بهترین کیفیت)'
+          - 'bestvideo[height<=1080]+bestaudio/best[height<=1080] (1080p)'
+          - 'bestvideo[height<=720]+bestaudio/best[height<=720] (720p)'
+          - 'bestvideo[height<=480]+bestaudio/best[height<=480] (480p)'
+          - 'bestaudio/best (فقط صدا - mp3)'
+      split_size:
+        description: |
+          حجم هر تکه (مگابایت)
+          نکته: اگه حجم فایل کمتر از این عدد باشه، فقط یه تکه ساخته میشه
+        required: false
+        type: choice
+        default: '95  (حداکثر - برای فایل‌های حجیم)'
+        options:
+          - '25  (اینترنت ضعیف - فایل‌های کوچک)'
+          - '50  (متوسط)'
+          - '95  (حداکثر - برای فایل‌های حجیم)'
+      delete_old_archives:
+        description: 'پاک کردن فایل‌های قبلی شبکه‌های اجتماعی'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sci-hub-social-queue
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  social-media-dl:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Clean old social media archives
+        if: ${{ github.event.inputs.delete_old_archives == 'true' }}
+        run: |
+          echo "Cleaning old social media archives..."
+          find . -maxdepth 1 -type d -name "social" -exec rm -rf {} \;
+          git rm --cached -r social 2>/dev/null || true
+          echo "Old social media archives cleaned."
+
+      - name: Parse inputs
+        id: parse
+        run: |
+          SIZE=$(echo "${{ github.event.inputs.split_size }}" | grep -oP '\d+')
+          echo "split_mb=${SIZE:-95}" >> $GITHUB_OUTPUT
+
+          cat > urls.txt << URLEOF
+          ${{ github.event.inputs.media_url_1 }}
+          ${{ github.event.inputs.media_url_2 }}
+          ${{ github.event.inputs.media_url_3 }}
+          ${{ github.event.inputs.media_url_4 }}
+          ${{ github.event.inputs.media_url_5 }}
+          URLEOF
+
+          sed -i '/^$/d' urls.txt
+          sed -i 's/^[ \t]*//;s/[ \t]*$//' urls.txt
+
+          total=$(wc -l < urls.txt)
+          echo "url_count=${total}" >> $GITHUB_OUTPUT
+          echo "URL count: ${total}"
+          cat -n urls.txt
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y p7zip-full ffmpeg
+          pip install --upgrade yt-dlp
+
+      - name: Download all media
+        id: download_media
+        run: |
+          mkdir -p dl_temp
+          total=${{ steps.parse.outputs.url_count }}
+          counter=1
+          success=0
+          QUALITY="${{ github.event.inputs.quality }}"
+
+          while IFS= read -r url; do
+            echo "========================================="
+            echo "[$counter/$total] Downloading: $url"
+
+            # استخراج اسم سایت از URL
+            SITE=$(echo "$url" | sed 's/.*\/\///' | sed 's/\/.*//' | sed 's/www\.//')
+            TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+            PREFIX="sci-hub.ir"
+
+            if [ "$total" -gt 1 ]; then
+              NUM=$(printf '%02d' $counter)
+              OUTPUT_TEMPLATE="dl_temp/${PREFIX}_${NUM}_${SITE}_${TIMESTAMP}.%(ext)s"
+            else
+              OUTPUT_TEMPLATE="dl_temp/${PREFIX}_${SITE}_${TIMESTAMP}.%(ext)s"
+            fi
+
+            echo "Output template: ${OUTPUT_TEMPLATE}"
+
+            if [ "$QUALITY" = "bestaudio/best (فقط صدا - mp3)" ]; then
+              yt-dlp -f bestaudio --extract-audio --audio-format mp3 --audio-quality 0 \
+                -o "$OUTPUT_TEMPLATE" "$url" && success=$((success + 1))
+            else
+              yt-dlp -f "$QUALITY" --merge-output-format mp4 \
+                -o "$OUTPUT_TEMPLATE" "$url" && success=$((success + 1))
+            fi
+
+            counter=$((counter + 1))
+          done < urls.txt
+
+          echo "success_count=${success}" >> $GITHUB_OUTPUT
+          echo "Downloaded: $success / $total"
+
+      - name: Process and archive each media
+        id: process_media
+        run: |
+          SPLIT_MB=${{ steps.parse.outputs.split_mb }}
+          TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+          FOLDER="social/${TIMESTAMP}"
+          mkdir -p "$FOLDER"
+
+          echo "Output folder: ${FOLDER}"
+          echo "Split size: ${SPLIT_MB}MB"
+
+          counter=0
+
+          for file in dl_temp/*; do
+            [ -f "$file" ] || continue
+            counter=$((counter + 1))
+
+            echo "========================================="
+            echo "Processing: $(basename "$file")"
+
+            FILENAME=$(basename "$file")
+            NAME="${FILENAME%.*}"
+
+            7z a -mx=3 -v${SPLIT_MB}m "${FOLDER}/${NAME}.7z" "$file"
+
+            if [ -f "${FOLDER}/${NAME}.7z.001" ] && [ ! -f "${FOLDER}/${NAME}.7z.002" ]; then
+              mv "${FOLDER}/${NAME}.7z.001" "${FOLDER}/${NAME}.7z"
+              echo "Single chunk"
+            else
+              echo "Multiple chunks"
+            fi
+          done
+
+          rm -rf dl_temp
+
+          echo "processed_count=${counter}" >> $GITHUB_OUTPUT
+          echo "folder=${FOLDER}" >> $GITHUB_OUTPUT
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}"
+
+      - name: Commit and Push all chunks
+        run: |
+          FOLDER="${{ steps.process_media.outputs.folder }}"
+
+          echo "Adding files from ${FOLDER}..."
+          git add "${FOLDER}/"*.7z* 2>/dev/null || true
+
+          if ! git diff --staged --quiet; then
+            file_count=$(git diff --staged --name-only | wc -l)
+            git commit -m "Add ${{ steps.process_media.outputs.processed_count }} media(s) in ${FOLDER} (${file_count} chunks)"
+            echo "Committed $file_count files."
+
+            push_success=false
+            max_attempts=15
+
+            for attempt in $(seq 1 $max_attempts); do
+              echo "Push attempt $attempt of $max_attempts..."
+              git pull --rebase origin main 2>/dev/null || true
+
+              if git push origin main; then
+                echo "Push successful on attempt $attempt."
+                push_success=true
+                break
+              else
+                echo "Push failed. Retrying in 20 seconds..."
+                sleep 20
+              fi
+            done
+
+            if [ "$push_success" = false ]; then
+              echo "Push failed after $max_attempts attempts."
+              exit 1
+            fi
+          else
+            echo "No files to commit."
+          fi
+
+      - name: Summary
+        run: |
+          FOLDER="${{ steps.process_media.outputs.folder }}"
+          TOTAL_SIZE=$(du -sh "$FOLDER" 2>/dev/null | awk '{print $1}')
+          if [ -z "$TOTAL_SIZE" ]; then TOTAL_SIZE="N/A"; fi
+
+          echo ""
+          echo "========================================="
+          echo "Job completed!"
+          echo "Downloaded: ${{ steps.download_media.outputs.success_count }} / ${{ steps.parse.outputs.url_count }}"
+          echo "Processed: ${{ steps.process_media.outputs.processed_count }} media(s)"
+          echo "Split size: ${{ steps.parse.outputs.split_mb }}MB"
+          echo "Folder: $FOLDER"
+          echo "Total size: ${TOTAL_SIZE}"
+          echo "========================================="
+
+          cat >> $GITHUB_STEP_SUMMARY << EOF
+          ## 📊 خلاصه اجرا
+
+          | Item | Value |
+          |------|-------|
+          | Downloaded | ${{ steps.download_media.outputs.success_count }} / ${{ steps.parse.outputs.url_count }} |
+          | Processed | ${{ steps.process_media.outputs.processed_count }} media(s) |
+          | Split Size | ${{ steps.parse.outputs.split_mb }} MB |
+          | Total Size | ${TOTAL_SIZE} |
+          | Folder | [📂 ${FOLDER}](https://github.com/${{ github.repository }}/tree/main/${FOLDER}) |
+          | Status | ✅ Success |
+
+          ### 📥 [View Files](https://github.com/${{ github.repository }}/tree/main/${FOLDER})
+          EOF
