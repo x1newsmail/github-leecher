@@ -1,4 +1,4 @@
-name: دانلود از شبکه‌های اجتماعی
+name: 📡 دریافت محتوا (یوتیوب، اینستاگرام و...)
 
 on:
   workflow_dispatch:
@@ -18,21 +18,11 @@ on:
         required: false
         type: string
         default: ''
-      media_url_4:
-        description: 'لینک ۴ (اختیاری)'
-        required: false
-        type: string
-        default: ''
-      media_url_5:
-        description: 'لینک ۵ (اختیاری)'
-        required: false
-        type: string
-        default: ''
       quality:
         description: 'کیفیت (فقط صدا = mp3)'
         required: false
         type: choice
-        default: 'bestvideo+bestaudio/best'
+        default: 'bestvideo+bestaudio/best (بهترین کیفیت)'
         options:
           - 'bestvideo+bestaudio/best (بهترین کیفیت)'
           - 'bestvideo[height<=1080]+bestaudio/best[height<=1080] (1080p)'
@@ -51,7 +41,7 @@ on:
           - '50  (متوسط)'
           - '95  (حداکثر - برای فایل‌های حجیم)'
       delete_old_archives:
-        description: 'پاک کردن فایل‌های قبلی شبکه‌های اجتماعی'
+        description: 'پاک کردن فایل‌های قبلی دریافت محتوا'
         required: false
         type: boolean
         default: false
@@ -60,12 +50,12 @@ permissions:
   contents: write
 
 concurrency:
-  group: sci-hub-social-queue
+  group: sci-hub-media-queue
   cancel-in-progress: false
   queue: max
 
 jobs:
-  social-media-dl:
+  media-downloader:
     runs-on: ubuntu-latest
 
     steps:
@@ -74,13 +64,13 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Clean old social media archives
+      - name: Clean old media archives
         if: ${{ github.event.inputs.delete_old_archives == 'true' }}
         run: |
-          echo "Cleaning old social media archives..."
-          find . -maxdepth 1 -type d -name "social" -exec rm -rf {} \;
-          git rm --cached -r social 2>/dev/null || true
-          echo "Old social media archives cleaned."
+          echo "Cleaning old media archives..."
+          find . -maxdepth 1 -type d -name "media" -exec rm -rf {} \;
+          git rm --cached -r media 2>/dev/null || true
+          echo "Old media archives cleaned."
 
       - name: Parse inputs
         id: parse
@@ -92,8 +82,6 @@ jobs:
           ${{ github.event.inputs.media_url_1 }}
           ${{ github.event.inputs.media_url_2 }}
           ${{ github.event.inputs.media_url_3 }}
-          ${{ github.event.inputs.media_url_4 }}
-          ${{ github.event.inputs.media_url_5 }}
           URLEOF
 
           sed -i '/^$/d' urls.txt
@@ -123,10 +111,9 @@ jobs:
             echo "========================================="
             echo "[$counter/$total] Downloading: $url"
 
-            # استخراج اسم سایت از URL
             SITE=$(echo "$url" | sed 's/.*\/\///' | sed 's/\/.*//' | sed 's/www\.//')
             TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-            PREFIX="sci-hub.ir"
+            PREFIX="Sci-HuB.iR"
 
             if [ "$total" -gt 1 ]; then
               NUM=$(printf '%02d' $counter)
@@ -156,7 +143,7 @@ jobs:
         run: |
           SPLIT_MB=${{ steps.parse.outputs.split_mb }}
           TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-          FOLDER="social/${TIMESTAMP}"
+          FOLDER="media/${TIMESTAMP}"
           mkdir -p "$FOLDER"
 
           echo "Output folder: ${FOLDER}"
